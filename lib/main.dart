@@ -1,4 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:sqlite3/common.dart';
+import 'package:sqlite3/wasm.dart';
+
+Future<WasmSqlite3> _sqlite3 = WasmSqlite3.loadFromUrl(
+    Uri.parse('sqlite3.wasm')); // assume existing web/sqlite3.wasm
 
 void main() {
   runApp(const MyApp());
