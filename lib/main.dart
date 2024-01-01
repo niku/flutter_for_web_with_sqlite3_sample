@@ -1,6 +1,7 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-import 'package:sqlite3/common.dart';
 import 'package:sqlite3/wasm.dart';
 
 Future<WasmSqlite3> _sqlite3 = WasmSqlite3.loadFromUrl(
@@ -61,16 +62,37 @@ class MyHomePage extends StatefulWidget {
 }
 
 class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
+  late Future<CommonDatabase> db;
 
-  void _incrementCounter() {
-    setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
+  void _loadDatabase(final WasmSqlite3 sqlite3, final String path,
+      final Uint8List databaseBinary) {
+    final fs = InMemoryFileSystem();
+    sqlite3.registerVirtualFileSystem(fs, makeDefault: true);
+
+    // borrowed by
+    // https://github.com/tekartik/sqflite/blob/v2.3.0/packages_web/sqflite_common_ffi_web/lib/src/database_file_system_web.dart#L72-L88
+    final file = fs
+        .xOpen(Sqlite3Filename(fs.xFullPathName(path)),
+            SqlFlag.SQLITE_OPEN_READWRITE | SqlFlag.SQLITE_OPEN_CREATE)
+        .file;
+    try {
+      file.xTruncate(0);
+      file.xWrite(databaseBinary, 0);
+    } finally {
+      file.xClose();
+    }
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    db = Future(() async {
+      final sqlite3 = await _sqlite3;
+      const path = 'my-original-data';
+      final databaseBinary = await http
+          .readBytes(Uri.parse('main.db')); // assume existing web/main.db
+      _loadDatabase(sqlite3, path, databaseBinary);
+      return sqlite3.open(path);
     });
   }
 
@@ -95,37 +117,33 @@ class _MyHomePageState extends State<MyHomePage> {
       body: Center(
         // Center is a layout widget. It takes a single child and positions it
         // in the middle of the parent.
-        child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          //
-          // TRY THIS: Invoke "debug painting" (choose the "Toggle Debug Paint"
-          // action in the IDE, or press "p" in the console), to see the
-          // wireframe for each widget.
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            const Text(
-              'You have pushed the button this many times:',
-            ),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-          ],
+        child: FutureBuilder<CommonDatabase>(
+          future: db,
+          builder: (context, snapshot) {
+            if (snapshot.hasData) {
+              const sql = 'SELECT id, value FROM greetings ORDER BY id;';
+              final resultSet = snapshot.data!.select(
+                  sql); // assume having table 'greeting' and its column 'id' and 'value'.
+              return DataTable(
+                columns: resultSet.columnNames
+                    .map((e) => DataColumn(label: Text(e)))
+                    .toList(),
+                rows: resultSet.rows.map((row) {
+                  return DataRow(
+                      cells: row.map((cell) {
+                    return DataCell(Text(cell.toString()));
+                  }).toList());
+                }).toList(),
+              );
+            } else if (snapshot.hasError) {
+              return Text('${snapshot.error}');
+            }
+
+            // By default, show a loading spinner.
+            return const CircularProgressIndicator();
+          },
         ),
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
-      ), // This trailing comma makes auto-formatting nicer for build methods.
     );
   }
 }
